@@ -1,0 +1,9 @@
+# requirements for dask
+dask[dataframe]
+pyarrow>=14.0
+
+# requirements for ray
+ray[default,data,serve,tune]>=2.9
+GPUtil
+tblib
+awscli

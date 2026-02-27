@@ -1,5 +1,4 @@
-# coding=utf-8
-# Copyright (c) 2019 Uber Technologies, Inc.
+# Copyright (c) 2023 Predibase, Inc., 2019 Uber Technologies, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-from ludwig.api import LudwigModel
-from ludwig.cli import CLI
-from ludwig.globals import LUDWIG_VERSION as __version__
+import logging
+import sys
+
+from ludwig.globals import LUDWIG_VERSION as __version__  # noqa
+
+logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(message)s")
+
+# Disable annoying message about NUMEXPR_MAX_THREADS
+logging.getLogger("numexpr").setLevel(logging.WARNING)

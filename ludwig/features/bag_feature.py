@@ -1,6 +1,5 @@
 #! /usr/bin/env python
-# coding=utf-8
-# Copyright (c) 2019 Uber Technologies, Inc.
+# Copyright (c) 2023 Predibase, Inc., 2019 Uber Technologies, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,152 +17,114 @@ import logging
 from collections import Counter
 
 import numpy as np
-import tensorflow as tf
+import torch
 
-from ludwig.constants import *
-from ludwig.features.base_feature import BaseFeature
-from ludwig.features.base_feature import InputFeature
+from ludwig.constants import BAG, COLUMN, NAME, PROC_COLUMN
+from ludwig.features.base_feature import BaseFeatureMixin, InputFeature
 from ludwig.features.feature_utils import set_str_to_idx
-from ludwig.models.modules.embedding_modules import EmbedWeighted
-from ludwig.utils.misc import set_default_value
+from ludwig.features.set_feature import _SetPreprocessing
+from ludwig.schema.features.bag_feature import BagInputFeatureConfig
+from ludwig.types import FeatureMetadataDict, ModelConfigDict, PreprocessingConfigDict, TrainingSetMetadataDict
 from ludwig.utils.strings_utils import create_vocabulary
 
+logger = logging.getLogger(__name__)
 
-class BagBaseFeature(BaseFeature):
-    def __init__(self, feature):
-        super().__init__(feature)
-        self.type = BAG
 
-    preprocessing_defaults = {
-        'format': 'space',
-        'most_common': False,
-        'lowercase': 10000,
-        'missing_value_strategy': FILL_WITH_CONST,
-        'fill_value': ''
-    }
+class BagFeatureMixin(BaseFeatureMixin):
+    @staticmethod
+    def type():
+        return BAG
 
     @staticmethod
-    def get_feature_meta(column, preprocessing_parameters):
-        idx2str, str2idx, str2freq, max_size = create_vocabulary(
+    def cast_column(column, backend):
+        return column.astype(str)
+
+    @staticmethod
+    def get_feature_meta(
+        config: ModelConfigDict,
+        column,
+        preprocessing_parameters: PreprocessingConfigDict,
+        backend,
+        is_input_feature: bool,
+    ) -> FeatureMetadataDict:
+        vocabulary = create_vocabulary(
             column,
-            preprocessing_parameters['format'],
-            num_most_frequent=preprocessing_parameters['most_common'],
-            lowercase=preprocessing_parameters['lowercase']
+            preprocessing_parameters["tokenizer"],
+            num_most_frequent=preprocessing_parameters["most_common"],
+            lowercase=preprocessing_parameters["lowercase"],
+            processor=backend.df_engine,
         )
         return {
-            'idx2str': idx2str,
-            'str2idx': str2idx,
-            'str2freq': str2freq,
-            'vocab_size': len(str2idx),
-            'max_set_size': max_size
+            "idx2str": vocabulary.vocab,
+            "str2idx": vocabulary.str2idx,
+            "str2freq": vocabulary.str2freq,
+            "vocab_size": len(vocabulary.str2idx),
+            "max_set_size": vocabulary.max_sequence_length,
         }
 
     @staticmethod
-    def feature_data(column, metadata, preprocessing_parameters):
-        bag_matrix = np.zeros(
-            (len(column),
-             len(metadata['str2idx'])),
-            dtype=float
-        )
+    def feature_data(column, metadata, preprocessing_parameters: PreprocessingConfigDict, backend):
+        def to_vector(set_str):
+            bag_vector = np.zeros((len(metadata["str2idx"]),), dtype=np.float32)
+            col_counter = Counter(set_str_to_idx(set_str, metadata["str2idx"], preprocessing_parameters["tokenizer"]))
 
-        for i in range(len(column)):
-            col_counter = Counter(set_str_to_idx(
-                column[i],
-                metadata['str2idx'],
-                preprocessing_parameters['format'])
-            )
-            bag_matrix[i, list(col_counter.keys())] = list(col_counter.values())
+            bag_vector[list(col_counter.keys())] = list(col_counter.values())
+            return bag_vector
 
-        return bag_matrix
+        return backend.df_engine.map_objects(column, to_vector)
 
     @staticmethod
     def add_feature_data(
-            feature,
-            dataset_df,
-            data,
-            metadata,
-            preprocessing_parameters=None
+        feature_config,
+        input_df,
+        proc_df,
+        metadata,
+        preprocessing_parameters: PreprocessingConfigDict,
+        backend,
+        skip_save_processed_input,
     ):
-        data[feature['name']] = BagBaseFeature.feature_data(
-            dataset_df[feature['name']].astype(str),
-            metadata[feature['name']],
-            preprocessing_parameters
+        proc_df[feature_config[PROC_COLUMN]] = BagFeatureMixin.feature_data(
+            input_df[feature_config[COLUMN]],
+            metadata[feature_config[NAME]],
+            preprocessing_parameters,
+            backend,
         )
+        return proc_df
 
 
-class BagInputFeature(BagBaseFeature, InputFeature):
-    def __init__(self, feature):
-        super().__init__(feature)
+class BagInputFeature(BagFeatureMixin, InputFeature):
+    def __init__(self, input_feature_config: BagInputFeatureConfig, encoder_obj=None, **kwargs):
+        super().__init__(input_feature_config, **kwargs)
 
-        self.vocab = []
+        if encoder_obj:
+            self.encoder_obj = encoder_obj
+        else:
+            self.encoder_obj = self.initialize_encoder(input_feature_config.encoder)
 
-        self.embedding_size = 50
-        self.representation = 'dense'
-        self.embeddings_trainable = True
-        self.pretrained_embeddings = None
-        self.embeddings_on_cpu = False
-        self.dropout = False
-        self.initializer = None
-        self.regularize = True
+    def forward(self, inputs):
+        assert isinstance(inputs, torch.Tensor)
+        # assert inputs.dtype == tf.bool # this fails
 
-        _ = self.overwrite_defaults(feature)
+        encoder_output = self.encoder_obj(inputs)
 
-        self.embed_weighted = EmbedWeighted(
-            self.vocab,
-            self.embedding_size,
-            representation=self.representation,
-            embeddings_trainable=self.embeddings_trainable,
-            pretrained_embeddings=self.pretrained_embeddings,
-            embeddings_on_cpu=self.embeddings_on_cpu,
-            dropout=self.dropout,
-            initializer=self.initializer,
-            regularize=self.regularize
-        )
+        return encoder_output
 
-    def _get_input_placeholder(self):
-        # None dimension is for dealing with variable batch size
-        return tf.placeholder(
-            tf.float32,
-            shape=[None, len(self.vocab)],
-            name=self.name
-        )
+    @property
+    def input_shape(self) -> torch.Size:
+        return torch.Size([len(self.encoder_obj.config.vocab)])
 
-    def build_input(
-            self,
-            regularizer,
-            dropout_rate,
-            is_training=False,
-            **kwargs
-    ):
-        placeholder = self._get_input_placeholder()
-        logging.debug('placeholder: {0}'.format(placeholder))
-
-        embedded, embedding_size = self.embed_weighted(
-            placeholder,
-            regularizer,
-            dropout_rate,
-            is_training=False
-        )
-        logging.debug('feature_representation: {0}'.format(embedded))
-
-        feature_representation = {
-            'name': self.name,
-            'type': self.type,
-            'representation': embedded,
-            'size': embedding_size,
-            'placeholder': placeholder
-        }
-        return feature_representation
+    @property
+    def output_shape(self) -> torch.Size:
+        return self.encoder_obj.output_shape
 
     @staticmethod
-    def update_model_definition_with_metadata(
-            input_feature,
-            feature_metadata,
-            *args,
-            **kwargs
-    ):
-        input_feature['vocab'] = feature_metadata['idx2str']
+    def update_config_with_metadata(feature_config, feature_metadata, *args, **kwargs):
+        feature_config.encoder.vocab = feature_metadata["idx2str"]
 
     @staticmethod
-    def populate_defaults(input_feature):
-        set_default_value(input_feature, 'tied_weights', None)
+    def get_schema_cls():
+        return BagInputFeatureConfig
+
+    @staticmethod
+    def create_preproc_module(metadata: TrainingSetMetadataDict) -> torch.nn.Module:
+        return _SetPreprocessing(metadata, is_bag=True)

@@ -2,9 +2,11 @@
 # ludwig specific #
 ###################
 
+*.lock_preprocessing
 results/
 ludwig/results/
 results_*/
+ludwig_arm64/
 
 # ailabs-utils
 ailabs_util
@@ -12,6 +14,8 @@ docker_assets
 
 # data
 mnist_data/
+profile_images/
+./profile_images/
 
 ###########
 # General #
@@ -31,11 +35,13 @@ __pycache__/
 # Distribution / packaging
 .Python
 env/
+env*
 build/
 develop-eggs/
 dist/
 downloads/
-dataset/
+./downloads/
+./dataset/
 eggs/
 .eggs/
 lib/
@@ -72,8 +78,8 @@ coverage.xml
 # Data
 *.csv
 *.hdf5
-*.json
-
+*.meta.json
+*.parquet
 
 # Translations
 *.mo
@@ -113,7 +119,7 @@ celerybeat-schedule
 
 # virtualenv
 .venv
-venv/
+venv*
 ENV/
 
 # Spyder project settings
@@ -125,6 +131,24 @@ ENV/
 # PyCharm
 .idea
 
-# Exceptions
+# ctags
+tags
 
-!docs/search/search_index.json #Except for foo.dll
+# examples
+examples/*/data/
+examples/*/visualizations/
+
+# benchmarking configs
+ludwig/benchmarking/configs/
+
+# Aim tracking
+.aim/
+
+# Comet
+.comet.config
+
+# Test-generated artifacts (image/audio features)
+*.png
+*.wav
+generated_audio/
+generated_images/

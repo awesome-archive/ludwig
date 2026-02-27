@@ -1,6 +1,5 @@
 #! /usr/bin/env python
-# coding=utf-8
-# Copyright (c) 2019 Uber Technologies, Inc.
+# Copyright (c) 2023 Predibase, Inc., 2019 Uber Technologies, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,6 +19,8 @@ from html.parser import HTMLParser
 
 from ludwig.utils import strings_utils
 
+logger = logging.getLogger(__name__)
+
 
 class HTMLStripper(HTMLParser):
     def __init__(self):
@@ -33,11 +34,10 @@ class HTMLStripper(HTMLParser):
         self.fed.append(data)
 
     def get_data(self):
-        return ''.join(self.fed)
+        return "".join(self.fed)
 
     def error(self, message):
-        logging.error(message)
-        pass
+        logger.error(message)
 
 
 def strip_tags(html):
@@ -47,29 +47,32 @@ def strip_tags(html):
 
 
 # regular expressions for cleaning text
-res_pre = [
-    (re.compile(r'([^.:;\?\!>])(<br/?>)'), r'\1.\2'),
-    (re.compile(r'<br/?>'), r' ')
-]
+res_pre = [(re.compile(r"([^.:;\?\!>])(<br/?>)"), r"\1.\2"), (re.compile(r"<br/?>"), r" ")]
 res_post = [
-    (re.compile(r'[ \t\0]'), r' '),
-    (re.compile(r'[–_]'), r'-'),
-    (re.compile(r'[\’\‘]'), r'''),
-    (re.compile(r'[”“]]'), r'''),
-    (re.compile(r'℅'), r'%'),
-    (re.compile(r'([^.>])(<br/?>)'), r'\1.\2'),
-    (re.compile(r'\\\\[NnRr]'), r' '),
-    (re.compile(r'\\[NnRr]'), r' '),
-    (re.compile(r'[\n\r]'), r' '),
-    (re.compile(r'\\\\'), r' / '),
-    (re.compile(r'<br/?>'), r' '),
-    (re.compile(r'\\\\'''), r'\''),
-    (re.compile(r'^\'([^\']+)$'), r'\1'),
-    (re.compile(r'([\<\>\{\}\[\]\(\)\-\+\=:;,\./\?\!\$%&£#@\'₹ ])\1+'), r'\1'),
-    (re.compile(
-        r'[^qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM1234567890\<\>\{\}\[\]\(\)\-\+\=:;,\./\?\!\$%&£#@\'₹ ]'),
-     r' '),
-    (re.compile(r'\s{2,}'), r' ')
+    (re.compile(r"[ \t\0]"), r" "),
+    (re.compile(r"[–_]"), r"-"),
+    (
+        re.compile(r"[\’\‘]"),
+        r"""),
+    (re.compile(r'[”“]]'), r""",
+    ),
+    (re.compile(r"℅"), r"%"),
+    (re.compile(r"([^.>])(<br/?>)"), r"\1.\2"),
+    (re.compile(r"\\\\[NnRr]"), r" "),
+    (re.compile(r"\\[NnRr]"), r" "),
+    (re.compile(r"[\n\r]"), r" "),
+    (re.compile(r"\\\\"), r" / "),
+    (re.compile(r"<br/?>"), r" "),
+    (re.compile(r"\\\\" ""), r"\'"),
+    (re.compile(r"^\'([^\']+)$"), r"\1"),
+    (re.compile(r"([\<\>\{\}\[\]\(\)\-\+\=:;,\./\?\!\$%&£#@\'₹ ])\1+"), r"\1"),
+    (
+        re.compile(
+            r"[^qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM1234567890\<\>\{\}\[\]\(\)\-\+\=:;,\./\?\!\$%&£#@\'₹ ]"  # noqa
+        ),
+        r" ",
+    ),
+    (re.compile(r"\s{2,}"), r" "),
 ]
 
 

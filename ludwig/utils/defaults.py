@@ -1,6 +1,5 @@
 #! /usr/bin/env python
-# coding=utf-8
-# Copyright (c) 2019 Uber Technologies, Inc.
+# Copyright (c) 2023 Predibase, Inc., 2019 Uber Technologies, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,164 +13,86 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-from ludwig.constants import *
-from ludwig.features.feature_registries import base_type_registry
-from ludwig.features.feature_registries import input_type_registry
-from ludwig.features.feature_registries import output_type_registry
-from ludwig.utils.misc import get_from_registry
-from ludwig.utils.misc import merge_dict
-from ludwig.utils.misc import set_default_value
+import argparse
+import copy
+import logging
+
+import yaml
+
+from ludwig.api_annotations import DeveloperAPI
+from ludwig.contrib import add_contrib_callback_args
+from ludwig.features.feature_registries import get_input_type_registry
+from ludwig.globals import LUDWIG_VERSION
+from ludwig.schema.model_config import ModelConfig
+from ludwig.schema.preprocessing import PreprocessingConfig
+from ludwig.utils.backward_compatibility import upgrade_config_dict_to_latest_version
+from ludwig.utils.data_utils import load_config_from_str, load_yaml
+from ludwig.utils.fs_utils import open_file
+from ludwig.utils.print_utils import print_ludwig
+
+logger = logging.getLogger(__name__)
 
 default_random_seed = 42
 
-default_preprocessing_force_split = False
-default_preprocessing_split_probabilities = (0.7, 0.1, 0.2)
-default_preprocessing_stratify = None
-
-default_preprocessing_parameters = {
-    'force_split': default_preprocessing_force_split,
-    'split_probabilities': default_preprocessing_split_probabilities,
-    'stratify': default_preprocessing_stratify
-}
-default_preprocessing_parameters.update({
-    name: base_type.preprocessing_defaults for name, base_type in
-base_type_registry.items()
-})
-
-default_combiner_type = 'concat'
-
-default_training_params = {
-    'optimizer': {'type': 'adam'},
-    'epochs': 200,
-    'regularizer': 'l2',
-    'regularization_lambda': 0,
-    'learning_rate': 0.001,
-    'batch_size': 128,
-    'dropout_rate': 0.0,
-    'early_stop': 3,
-    'reduce_learning_rate_on_plateau': 0,
-    'reduce_learning_rate_on_plateau_patience': 5,
-    'reduce_learning_rate_on_plateau_rate': 0.5,
-    'increase_batch_size_on_plateau': 0,
-    'increase_batch_size_on_plateau_patience': 5,
-    'increase_batch_size_on_plateau_rate': 2,
-    'increase_batch_size_on_plateau_max': 512,
-    'decay': False,
-    'decay_steps': 10000,
-    'decay_rate': 0.96,
-    'staircase': False,
-    'gradient_clipping': None,
-    'validation_field': 'combined',
-    'validation_measure': LOSS,
-    'bucketing_field': None,
-    'learning_rate_warmup_epochs': 5
+# Still needed for preprocessing  TODO(Connor): Refactor ludwig/data/preprocessing to use schema
+# TODO(travis): remove this, make type a protected string for each subclass
+default_feature_specific_preprocessing_parameters = {
+    name: preproc_sect.get_schema_cls()(name="__tmp__", type=name).preprocessing.to_dict()
+    for name, preproc_sect in get_input_type_registry().items()
 }
 
-default_optimizer_params_registry = {
-    'adam': {
-        'beta1': 0.9,
-        'beta2': 0.999,
-        'epsilon': 1e-08
-    },
-    'adadelta': {
-        'rho': 0.95,
-        'epsilon': 1e-08
-    },
-    'adagrad': {
-        'initial_accumulator_value': 0.1
-    },
-    'adagradda': {
-        'initial_gradient_squared_accumulator_value': 0.1,
-        'l1_regularization_strength': 0.0,
-        'l2_regularization_strength': 0.0
-    },
-    'momentum': {
-        'momentum': 0.1
-    },
-    'ftrl': {
-        'learning_rate_power': -0.5,
-        'initial_accumulator_value': 0.1,
-        'l1_regularization_strength': 0.0,
-        'l2_regularization_strength': 0.0
-    },
-    'proximalgd': {
-        'l1_regularization_strength': 0.0,
-        'l2_regularization_strength': 0.0
-    },
-    'proximaladagrad': {
-        'initial_accumulator_value': 0.1,
-        'l1_regularization_strength': 0.0,
-        'l2_regularization_strength': 0.0
-    },
-    'rmsprop': {
-        'decay': 0.9,
-        'momentum': 0.0,
-        'epsilon': 1e-10,
-        'centered': False
-    }
-}
+default_training_preprocessing_parameters = copy.deepcopy(default_feature_specific_preprocessing_parameters)
+default_training_preprocessing_parameters.update(PreprocessingConfig().to_dict())
+
+default_prediction_preprocessing_parameters = copy.deepcopy(default_feature_specific_preprocessing_parameters)
 
 
-def get_default_optimizer_params(optimizer_type):
-    if optimizer_type in default_optimizer_params_registry:
-        return default_optimizer_params_registry[optimizer_type]
+@DeveloperAPI
+def render_config(config=None, output=None, **kwargs):
+    upgraded_config = upgrade_config_dict_to_latest_version(config)
+    output_config = ModelConfig.from_dict(upgraded_config).to_dict()
+
+    if output is None:
+        print(yaml.safe_dump(output_config, None, sort_keys=False))
     else:
-        raise ValueError('Incorrect optimizer type: ' + optimizer_type)
+        with open_file(output, "w") as f:
+            yaml.safe_dump(output_config, f, sort_keys=False)
 
 
-def merge_with_defaults(model_definition):
-    # ===== Preprocessing =====
-    model_definition['preprocessing'] = merge_dict(
-        default_preprocessing_parameters,
-        model_definition.get('preprocessing', {})
+@DeveloperAPI
+def cli_render_config(sys_argv):
+    parser = argparse.ArgumentParser(
+        description="This script renders the full config from a user config.",
+        prog="ludwig render_config",
+        usage="%(prog)s [options]",
+    )
+    parser.add_argument(
+        "-c",
+        "--config",
+        type=load_yaml,
+        help="Path to the YAML file containing the model configuration",
+    )
+    parser.add_argument(
+        "-cs",
+        "--config_str",
+        dest="config",
+        type=load_config_from_str,
+        help="JSON or YAML serialized string of the model configuration",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=str,
+        help="output rendered YAML config path",
+        required=False,
     )
 
-    stratify = model_definition['preprocessing']['stratify']
+    add_contrib_callback_args(parser)
+    args = parser.parse_args(sys_argv)
 
-    if stratify is not None:
-        if stratify not in [x['name'] for x in
-                            model_definition['output_features']]:
-            raise ValueError('Stratify must be in output features')
-        if ([x for x in model_definition['output_features'] if
-             x['name'] == stratify][0]['type']
-                not in [BINARY, CATEGORY]):
-            raise ValueError('Stratify feature must be binary or category')
-    # ===== Model =====
-    set_default_value(model_definition, 'combiner',
-                      {'type': default_combiner_type})
+    args.callbacks = args.callbacks or []
+    for callback in args.callbacks:
+        callback.on_cmdline("render_config", *sys_argv)
 
-    # ===== Training =====
-    set_default_value(model_definition, 'training', default_training_params)
-
-    for param in default_training_params:
-        set_default_value(model_definition['training'], param,
-                          default_training_params[param])
-
-    if len(model_definition['output_features']) == 0:
-        raise ValueError('No output features are defined')
-
-    set_default_value(
-        model_definition['training'],
-        'validation_measure',
-        output_type_registry[model_definition['output_features'][0][
-            'type']].default_validation_measure
-    )
-
-    # ===== Training Optimizer =====
-    optimizer = model_definition['training']['optimizer']
-    default_optimizer_params = get_default_optimizer_params(optimizer['type'])
-    for param in default_optimizer_params:
-        set_default_value(optimizer, param, default_optimizer_params[param])
-
-    # ===== Input Features =====
-    for input_feature in model_definition['input_features']:
-        get_from_registry(input_feature['type'],
-                          input_type_registry).populate_defaults(input_feature)
-
-    # ===== Output features =====
-    for output_feature in model_definition['output_features']:
-        get_from_registry(output_feature['type'],
-                          output_type_registry).populate_defaults(
-            output_feature)
-
-    return model_definition
+    print_ludwig("Render Config", LUDWIG_VERSION)
+    render_config(**vars(args))
